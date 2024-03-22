@@ -1,69 +1,79 @@
+import boto3
+import json
+
 def lambda_handler(event, context):
-    return {
-        'statusCode': 200,
-        'body': 'Hello, World!'
+    body = json.loads(event['body'])
+    
+    id_image = body["id_image"]
+    face_image = body["face"]
+    name = body["firstName"]
+    birth = body["birth"]
+    rg = body["rg"]
+    cpf = body["cpf"]
+    
+    extracted_data = {
+        'nome': False,
+        'birth': False,
+        'rg': False,
+        'cpf': False
     }
 
+    def rekognition(face_image, id_image):
+        confidence = 0
+        client = boto3.client('rekognition')
+        
+        source_image_bytes = face_image
+        target_image_bytes = id_image
 
-# REKOGNITION
-#Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-#PDX-License-Identifier: MIT-0 (For details, see https://github.com/awsdocs/amazon-rekognition-developer-guide/blob/master/LICENSE-SAMPLECODE.)
+        response = client.compare_faces(
+            SimilarityThreshold=70,
+            SourceImage={'Bytes': source_image_bytes},
+            TargetImage={'Bytes': target_image_bytes}
+        )
 
-# import boto3
+        for faceMatch in response['FaceMatches']:
+            confidence = str(faceMatch['Face']['Confidence'])
+        
+        return float(confidence) >= 90
 
-# if __name__ == "__main__":
-
-#     sourceFile='source.jpg'
-#     targetFile='target.jpg'
-#     client=boto3.client('rekognition')
-   
-#     imageSource=open(sourceFile,'rb')
-#     imageTarget=open(targetFile,'rb')
-
-#     response=client.compare_faces(SimilarityThreshold=70,
-#                                   SourceImage={'Bytes': imageSource.read()},
-#                                   TargetImage={'Bytes': imageTarget.read()})
+    def textract(name, birth, rg, cpf):
+        session = boto3.Session(profile_name='default')
+        client = session.client('textract', region_name='us-east-1')
+        
+        response = client.analyze_document(
+            Document={
+                'Bytes': id_image
+            },
+            FeatureTypes=['FORMS']
+        )
     
-#     for faceMatch in response['FaceMatches']:
-#         position = faceMatch['Face']['BoundingBox']
-#         confidence = str(faceMatch['Face']['Confidence'])
-#         print('The face at ' +
-#                str(position['Left']) + ' ' +
-#                str(position['Top']) +
-#                ' matches with ' + confidence + '% confidence')
+        for item in response["Blocks"]:
+            if item["BlockType"] == "LINE":
+                text = item["Text"]
+                if name in text:
+                    extracted_data['nome'] = True
+                if birth in text:
+                    extracted_data['birth'] = True
+                if rg in text:
+                    extracted_data['rg'] = True
+                if cpf in text:
+                    extracted_data['cpf'] = True
 
-#     imageSource.close()
-#     imageTarget.close()               
-
-
-
-# TEXTRACT
-# import boto3
-
-# def analyze_id(client, bucket_name, file_name):
-
-#     # Analyze document
-#     # process using S3 object
-#     response = client.analyze_id(
-#         DocumentPages=[{'S3Object': {'Bucket': bucket_name, 'Name': file_name}}])
-
-#     for doc_fields in response['IdentityDocuments']:
-#         for id_field in doc_fields['IdentityDocumentFields']:
-#             for key, val in id_field.items():
-#                 if "Type" in str(key):
-#                     print("Type: " + str(val['Text']))
-#             for key, val in id_field.items():
-#                 if "ValueDetection" in str(key):
-#                     print("Value Detection: " + str(val['Text']))
-#             print()
-
-# def main():
-#     session = boto3.Session(profile_name='profile-name')
-#     client = session.client('textract', region_name='region')
-#     bucket_name = "bucket"
-#     file_name = "file"
-
-#     analyze_id(client, bucket_name, file_name)
-
-# if __name__ == "__main__":
-#     main()
+        all_fields_found = all(extracted_data.values())
+        if all_fields_found:
+            return True
+        else:
+            return False
+        
+    if rekognition(face_image, id_image) and textract(name, birth, rg, cpf):
+        return {
+            'statusCode': 200,
+            'headers': {
+                'Access-Control-Allow-Headers': 'Content-Type',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
+            },
+            'body': {
+                'verified': True
+            }
+        }
